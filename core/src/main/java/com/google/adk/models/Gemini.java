@@ -223,6 +223,7 @@ public class Gemini extends BaseLlm {
       return Flowable.defer(
           () -> {
             final StringBuilder accumulatedText = new StringBuilder();
+            final StringBuilder accumulatedThoughtText = new StringBuilder();
             // Array to bypass final local variable reassignment in lambda.
             final GenerateContentResponse[] lastRawResponseHolder = {null};
 
@@ -235,15 +236,39 @@ public class Gemini extends BaseLlm {
 
                       List<LlmResponse> responsesToEmit = new ArrayList<>();
                       LlmResponse currentProcessedLlmResponse = LlmResponse.create(rawResponse);
-                      String currentTextChunk =
-                          GeminiUtil.getTextFromLlmResponse(currentProcessedLlmResponse);
+                      Optional<Part> part =
+                          GeminiUtil.getPart0FromLlmResponse(currentProcessedLlmResponse);
+                      String currentTextChunk = part.flatMap(Part::text).orElse("");
 
                       if (!currentTextChunk.isEmpty()) {
-                        accumulatedText.append(currentTextChunk);
+                        if (part.get().thought().orElse(false)) {
+                          accumulatedThoughtText.append(currentTextChunk);
+                        } else {
+                          accumulatedText.append(currentTextChunk);
+                        }
+
                         LlmResponse partialResponse =
                             currentProcessedLlmResponse.toBuilder().partial(true).build();
                         responsesToEmit.add(partialResponse);
                       } else {
+                        if (accumulatedThoughtText.length() > 0
+                            && GeminiUtil.shouldEmitAccumulatedText(currentProcessedLlmResponse)) {
+                          LlmResponse aggregatedTextResponse =
+                              LlmResponse.builder()
+                                  .content(
+                                      Content.builder()
+                                          .role("model")
+                                          .parts(
+                                              Part.fromText(accumulatedThoughtText.toString())
+                                                  .toBuilder()
+                                                  .thought(true)
+                                                  .build())
+                                          .build())
+                                  .build();
+                          responsesToEmit.add(aggregatedTextResponse);
+                          accumulatedThoughtText.setLength(0);
+                        }
+
                         if (accumulatedText.length() > 0
                             && GeminiUtil.shouldEmitAccumulatedText(currentProcessedLlmResponse)) {
                           LlmResponse aggregatedTextResponse =
